@@ -58,3 +58,21 @@ Response:
 - DynamoDB: Stores logs of queries and responses, including timestamps, for auditing and analysis.
 - S3 (Optional): Used for storing documentation or static files related to the project.
 This architecture leverages AWS services to provide a scalable and reliable solution for handling chatbot requests and integrating with external APIs.
+
+## Test Case
+Ask current weather of a city
+```bash
+curl --location 'https://ct4apx1sc5.execute-api.us-east-1.amazonaws.com/dev/chatbot' \
+--header 'Content-Type: application/json' \
+--data '{
+  "query": "What's the weather in Bandung?"
+}'
+```
+Ask about random jokes
+```bash
+curl --location 'https://ct4apx1sc5.execute-api.us-east-1.amazonaws.com/dev/chatbot' \
+--header 'Content-Type: application/json' \
+--data '{
+  "query": "Tell me a joke."
+}'
+```
