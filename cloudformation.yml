@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: CloudFormation template for a chatbot application
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaBasicExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - dynamodb:PutItem
+                  - dynamodb:Scan
+                  - s3:PutObject
+                Resource: "*"
+
+  ChatbotLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ChatbotFunction
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      InlineCode: |
+        import json
+        import boto3
+        import requests
+        import os
+        from datetime import datetime
+
+        # Initialize DynamoDB resource
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table('ChatbotQueries')  # Ensure this matches your DynamoDB table name
+
+        def lambda_handler(event, context):
+            # Parse the incoming request
+            query = json.loads(event['body']).get('query', '')
+            response = {}
+
+            # Determine the type of request and fetch data accordingly
+            if 'weather' in query.lower():
+                city_part = query.split('in')[-1].strip()
+                city = ''.join(char for char in city_part if char.isalpha())
+                response = get_weather(city)
+            elif 'joke' in query.lower():
+                response = get_joke()
+
+            # Log the query and response in DynamoDB
+            log_query(query, json.dumps(response))
+
+            # Return the response
+            return {
+                'statusCode': 200,
+                'body': json.dumps(response)
+            }
+
+        def get_weather(city):
+            # Fetch weather data from OpenWeather API
+            api_key = os.environ['OPENWEATHER_API_KEY']
+            url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}"
+            weather_data = requests.get(url).json()
+            return {
+                'city': city,
+                'temperature': weather_data['main']['temp'],
+                'description': weather_data['weather'][0]['description']
+            }
+
+        def get_joke():
+            # Fetch a random joke from the Official Joke API
+            url = os.environ['JOKE_API_URL']
+            joke_data = requests.get(url).json()
+            return {
+                'setup': joke_data['setup'],
+                'punchline': joke_data['punchline']
+            }
+
+        def log_query(query, response):
+            # Log the query and response in DynamoDB with a timestamp
+            table.put_item(
+                Item={
+                    'QueryId': str(datetime.now()),
+                    'Query': query,
+                    'Response': response
+                }
+            )
+      Runtime: python3.9
+      Environment:
+        Variables:
+          OPENWEATHER_API_KEY: 5dbd18fed0310723b7ebc00a80d3c4ce
+          JOKE_API_URL: https://official-joke-api.appspot.com/random_joke
+          LOGGING_BUCKET: chatbot-logs-bucket  # Replace with your S3 bucket for logs
+      Layers:
+        - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:requests-layer:1'
+
+  ChatbotApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: ChatbotApi
+
+  ChatbotResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ChatbotApi.RootResourceId
+      PathPart: chatbot
+      RestApiId: !Ref ChatbotApi
+
+  ChatbotMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref ChatbotResource
+      RestApiId: !Ref ChatbotApi
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - { LambdaArn: !GetAtt ChatbotLambdaFunction.Arn }
+
+  ChatbotDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ChatbotQueries
+      AttributeDefinitions:
+        - AttributeName: QueryId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: QueryId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  ExportLogsLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ExportLogsFunction
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      InlineCode: |
+        import boto3
+        import json
+        import os
+        from datetime import datetime, timedelta
+
+        # Initialize resources
+        dynamodb = boto3.resource('dynamodb')
+        s3 = boto3.client('s3')
+        table = dynamodb.Table('ChatbotQueries')
+        bucket_name = os.environ['LOGGING_BUCKET']
+
+        def lambda_handler(event, context):
+            # Calculate the date for logs to export
+            yesterday = datetime.now() - timedelta(days=1)
+            date_str = yesterday.strftime('%Y-%m-%d')
+
+            # Scan DynamoDB for logs from the previous day
+            response = table.scan()
+            logs = [item for item in response['Items'] if item['QueryId'].startswith(date_str)]
+
+            # Export logs to S3
+            if logs:
+                s3.put_object(
+                    Bucket=bucket_name,
+                    Key=f'logs/{date_str}.json',
+                    Body=json.dumps(logs)
+                )
+      Runtime: python3.9
+      Environment:
+        Variables:
+          LOGGING_BUCKET: chatbot-logs-bucket  # Replace with your S3 bucket for logs
+
+  ExportLogsEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 day)
+      Targets:
+        - Arn: !GetAtt ExportLogsLambdaFunction.Arn
+          Id: "ExportLogsFunction"
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ExportLogsLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+  
+  PermissionForApiGatewayToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ChatbotLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatbotApi}/*/POST/chatbot'
