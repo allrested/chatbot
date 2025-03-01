@@ -41,16 +41,13 @@ Resources:
         import os
         from datetime import datetime
 
-        # Initialize DynamoDB resource
         dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('ChatbotQueries')  # Ensure this matches your DynamoDB table name
+        table = dynamodb.Table('ChatbotQueries')
 
         def lambda_handler(event, context):
-            # Parse the incoming request
             query = json.loads(event['body']).get('query', '')
             response = {}
 
-            # Determine the type of request and fetch data accordingly
             if 'weather' in query.lower():
                 city_part = query.split('in')[-1].strip()
                 city = ''.join(char for char in city_part if char.isalpha())
@@ -58,17 +55,11 @@ Resources:
             elif 'joke' in query.lower():
                 response = get_joke()
 
-            # Log the query and response in DynamoDB
             log_query(query, json.dumps(response))
 
-            # Return the response
-            return {
-                'statusCode': 200,
-                'body': json.dumps(response)
-            }
+            return {'statusCode': 200, 'body': json.dumps(response)}
 
         def get_weather(city):
-            # Fetch weather data from OpenWeather API
             api_key = os.environ['OPENWEATHER_API_KEY']
             url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}"
             weather_data = requests.get(url).json()
@@ -79,7 +70,6 @@ Resources:
             }
 
         def get_joke():
-            # Fetch a random joke from the Official Joke API
             url = os.environ['JOKE_API_URL']
             joke_data = requests.get(url).json()
             return {
@@ -88,7 +78,6 @@ Resources:
             }
 
         def log_query(query, response):
-            # Log the query and response in DynamoDB with a timestamp
             table.put_item(
                 Item={
                     'QueryId': str(datetime.now()),
@@ -101,7 +90,7 @@ Resources:
         Variables:
           OPENWEATHER_API_KEY: 5dbd18fed0310723b7ebc00a80d3c4ce
           JOKE_API_URL: https://official-joke-api.appspot.com/random_joke
-          LOGGING_BUCKET: chatbot-logs-bucket  # Replace with your S3 bucket for logs
+          LOGGING_BUCKET: chatbot-logs-bucket
       Layers:
         - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:requests-layer:1'
 
@@ -131,6 +120,13 @@ Resources:
           - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
           - { LambdaArn: !GetAtt ChatbotLambdaFunction.Arn }
 
+  ChatbotApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ChatbotMethod
+    Properties:
+      RestApiId: !Ref ChatbotApi
+      StageName: prod
+
   ChatbotDynamoDBTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -155,22 +151,17 @@ Resources:
         import os
         from datetime import datetime, timedelta
 
-        # Initialize resources
         dynamodb = boto3.resource('dynamodb')
         s3 = boto3.client('s3')
         table = dynamodb.Table('ChatbotQueries')
         bucket_name = os.environ['LOGGING_BUCKET']
 
         def lambda_handler(event, context):
-            # Calculate the date for logs to export
             yesterday = datetime.now() - timedelta(days=1)
             date_str = yesterday.strftime('%Y-%m-%d')
-
-            # Scan DynamoDB for logs from the previous day
             response = table.scan()
             logs = [item for item in response['Items'] if item['QueryId'].startswith(date_str)]
 
-            # Export logs to S3
             if logs:
                 s3.put_object(
                     Bucket=bucket_name,
@@ -180,7 +171,7 @@ Resources:
       Runtime: python3.9
       Environment:
         Variables:
-          LOGGING_BUCKET: chatbot-logs-bucket  # Replace with your S3 bucket for logs
+          LOGGING_BUCKET: chatbot-logs-bucket
 
   ExportLogsEventRule:
     Type: AWS::Events::Rule
@@ -196,7 +187,7 @@ Resources:
       FunctionName: !Ref ExportLogsLambdaFunction
       Action: 'lambda:InvokeFunction'
       Principal: 'events.amazonaws.com'
-  
+
   PermissionForApiGatewayToInvokeLambda:
     Type: AWS::Lambda::Permission
     Properties:
@@ -204,3 +195,8 @@ Resources:
       Action: 'lambda:InvokeFunction'
       Principal: 'apigateway.amazonaws.com'
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatbotApi}/*/POST/chatbot'
+
+Outputs:
+  ChatbotApiUrl:
+    Description: "API Gateway endpoint URL for chatbot"
+    Value: !Sub "https://${ChatbotApi}.execute-api.${AWS::Region}.amazonaws.com/prod/chatbot"
