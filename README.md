@@ -4,22 +4,45 @@ This project is a simple chatbot that fetches weather data and random jokes usin
 ## Deployment Steps
 Ensure AWS CLI is Configured:
 
-Make sure the AWS CLI is installed and configured with the necessary permissions to create S3 buckets and deploy CloudFormation stacks.
-Make the Script Executable:
+Make sure the AWS CLI is installed and create S3 buckets to store CloudFormation stacks.
 
 Run the following command to make the script executable:
    ```bash
 chmod +x deploy.sh
    ```
-Execute the script to deploy the stack:
+Copy sample environnment:
+   ```bash
+cp .env.example .env
+   ```
+
+Edit Environment value and execute the script to deploy the stack:
    ```bash
 ./deploy.sh
    ```
-This script will automatically create a new S3 bucket with a unique name, upload the Lambda Layer, and deploy the CloudFormation stack.
+
+This script will automatically upload the Lambda Layer, and deploy the CloudFormation stack.
 
 Verify Deployment:
 - After deployment, you can verify the resources in the AWS Management Console under CloudFormation, Lambda, API Gateway, and DynamoDB.
-- You need to deploy stage on API Gateway to make the endpoint executable.
+
+## Custom Domain
+If you want to deploy to your custom domain, setting domain name on .env and make sure you have already add CAA domain below to DNS record.
+   ```text
+amazon.com
+amazontrust.com
+awstrust.com
+amazonaws.com
+   ```
+
+Run the following command to make the script executable:
+   ```bash
+chmod +x custom_domain.sh
+   ```
+
+Run the script to configure custom domain:
+   ```bash
+./custom_domain.sh
+   ```
 
 ## Sample Requests/Responses
 Weather Request
@@ -62,7 +85,7 @@ This architecture leverages AWS services to provide a scalable and reliable solu
 ## Test Case
 Ask current weather of a city
 ```bash
-curl --location 'https://ct4apx1sc5.execute-api.us-east-1.amazonaws.com/dev/chatbot' \
+curl --location 'https://chatapi.tatsuya.tech/chatbot' \
 --header 'Content-Type: application/json' \
 --data '{
   "query": "What's the weather in Bandung?"
@@ -70,9 +93,26 @@ curl --location 'https://ct4apx1sc5.execute-api.us-east-1.amazonaws.com/dev/chat
 ```
 Ask about random jokes
 ```bash
-curl --location 'https://ct4apx1sc5.execute-api.us-east-1.amazonaws.com/dev/chatbot' \
+curl --location 'https://chatapi.tatsuya.tech/chatbot' \
 --header 'Content-Type: application/json' \
 --data '{
   "query": "Tell me a joke."
 }'
 ```
+## Test Whatsapp Chat
+Ask current weather of a city
+<div align="center">
+  <a href="https://wa.me/6285155010043?text=What%27s%20the%20weather%20in%20London%3F">
+    <img src="https://img.shields.io/badge/Ask_Weather_via_WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" alt="Weather WhatsApp">
+  </a>
+  <br>
+  <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://wa.me/6285155010043?text=What%27s%20the%20weather%20in%20London%3F" width="120">
+</div>
+Ask about random jokes
+<div align="center">
+  <a href="https://wa.me/6285155010043?text=Tell%20me%20a%20joke.">
+    <img src="https://img.shields.io/badge/Ask_Joke_via_WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" alt="Joke WhatsApp">
+  </a>
+  <br>
+  <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://wa.me/6285155010043?text=Tell%20me%20a%20joke." width="120">
+</div>

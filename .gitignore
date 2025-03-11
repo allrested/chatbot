@@ -1,0 +1,6 @@
+# Ignore directories
+.aws/*
+layer/*
+*.zip
+*.bak
+.env

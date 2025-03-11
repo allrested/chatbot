@@ -1,0 +1,34 @@
+services:
+  chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: lambda-python
+    environment:
+      OPENWEATHER_API_KEY: your_openweather_api_key  # Replace with your actual API key
+      JOKE_API_URL: https://official-joke-api.appspot.com/random_joke
+      AWS_ACCESS_KEY_ID: your_access_key_id  # Replace with your AWS access key
+      AWS_SECRET_ACCESS_KEY: your_secret_access_key  # Replace with your AWS secret key
+      AWS_DEFAULT_REGION: us-east-1  # Replace with your AWS region
+    ports:
+      - "9000:8080"  # Expose the Lambda function on port 9000
+
+  dynamodb:
+    image: amazon/dynamodb-local
+    ports:
+      - "8000:8000"
+  aws:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: al2023-python
+      args:
+        - PYTHON_VERSION=3.12
+    container_name: aws
+    volumes:
+      - .:/var/task
+      - ~/.aws:/root/.aws:ro
+    environment:
+      - PYENV_ROOT=/root/.pyenv
+      - PATH=/root/.pyenv/shims:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    entrypoint: tail -f /dev/null

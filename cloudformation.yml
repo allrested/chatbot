@@ -1,6 +1,51 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: 'AWS::Serverless-2016-10-31'
-Description: CloudFormation template for a chatbot application
+Description: CloudFormation chatbot template with parameterized Lambda Layer ARN and dynamic Python runtime
+
+Parameters:
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket with Lambda code zips
+
+  ChatbotLambdaCodeS3Key:
+    Type: String
+    Default: chatbot_function.zip
+    Description: Zip file key for chatbot Lambda function
+
+  ExportLogsLambdaCodeS3Key:
+    Type: String
+    Default: export_logs_function.zip
+    Description: Zip file key for Export logs Lambda function
+
+  RequestsLayerArn:
+    Type: String
+    Description: ARN of the Lambda layer containing requests library
+
+  PythonRuntime:
+    Type: String
+    Default: python3.12
+    AllowedValues:
+      - python3.13
+      - python3.12
+      - python3.11
+      - python3.10
+      - python3.9
+    Description: Python runtime version for Lambda functions
+  
+  StageName:
+    Type: String
+    Default: api
+    Description: API Gateway deployment stage name
+
+  OpenWeatherApiKey:
+    Type: String
+    Default: OPENWEATHER_API_KEY
+    Description: OpenWeather API key
+  
+  JokeApiUrl:
+    Type: String
+    Default: https://official-joke-api.appspot.com/random_joke
+    Description: Joke API URL
 
 Resources:
   LambdaExecutionRole:
@@ -32,67 +77,33 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: ChatbotFunction
-      Handler: index.lambda_handler
+      Runtime: !Ref PythonRuntime
+      Handler: lambda_function.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      InlineCode: |
-        import json
-        import boto3
-        import requests
-        import os
-        from datetime import datetime
-
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('ChatbotQueries')
-
-        def lambda_handler(event, context):
-            query = json.loads(event['body']).get('query', '')
-            response = {}
-
-            if 'weather' in query.lower():
-                city_part = query.split('in')[-1].strip()
-                city = ''.join(char for char in city_part if char.isalpha())
-                response = get_weather(city)
-            elif 'joke' in query.lower():
-                response = get_joke()
-
-            log_query(query, json.dumps(response))
-
-            return {'statusCode': 200, 'body': json.dumps(response)}
-
-        def get_weather(city):
-            api_key = os.environ['OPENWEATHER_API_KEY']
-            url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}"
-            weather_data = requests.get(url).json()
-            return {
-                'city': city,
-                'temperature': weather_data['main']['temp'],
-                'description': weather_data['weather'][0]['description']
-            }
-
-        def get_joke():
-            url = os.environ['JOKE_API_URL']
-            joke_data = requests.get(url).json()
-            return {
-                'setup': joke_data['setup'],
-                'punchline': joke_data['punchline']
-            }
-
-        def log_query(query, response):
-            table.put_item(
-                Item={
-                    'QueryId': str(datetime.now()),
-                    'Query': query,
-                    'Response': response
-                }
-            )
-      Runtime: python3.9
+      CodeUri:
+        Bucket: !Ref LambdaCodeS3Bucket
+        Key: !Ref ChatbotLambdaCodeS3Key
       Environment:
         Variables:
-          OPENWEATHER_API_KEY: 5dbd18fed0310723b7ebc00a80d3c4ce
-          JOKE_API_URL: https://official-joke-api.appspot.com/random_joke
+          OPENWEATHER_API_KEY: !Ref OpenWeatherApiKey
+          JOKE_API_URL: !Ref JokeApiUrl
           LOGGING_BUCKET: chatbot-logs-bucket
       Layers:
-        - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:requests-layer:1'
+        - !Ref RequestsLayerArn
+
+  ExportLogsLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ExportLogsFunction
+      Runtime: !Ref PythonRuntime
+      Handler: export_logs.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri:
+        Bucket: !Ref LambdaCodeS3Bucket
+        Key: !Ref ExportLogsLambdaCodeS3Key
+      Environment:
+        Variables:
+          LOGGING_BUCKET: chatbot-logs-bucket
 
   ChatbotApi:
     Type: AWS::ApiGateway::RestApi
@@ -125,7 +136,7 @@ Resources:
     DependsOn: ChatbotMethod
     Properties:
       RestApiId: !Ref ChatbotApi
-      StageName: prod
+      StageName: !Ref StageName
 
   ChatbotDynamoDBTable:
     Type: AWS::DynamoDB::Table
@@ -139,40 +150,6 @@ Resources:
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
 
-  ExportLogsLambdaFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: ExportLogsFunction
-      Handler: index.lambda_handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      InlineCode: |
-        import boto3
-        import json
-        import os
-        from datetime import datetime, timedelta
-
-        dynamodb = boto3.resource('dynamodb')
-        s3 = boto3.client('s3')
-        table = dynamodb.Table('ChatbotQueries')
-        bucket_name = os.environ['LOGGING_BUCKET']
-
-        def lambda_handler(event, context):
-            yesterday = datetime.now() - timedelta(days=1)
-            date_str = yesterday.strftime('%Y-%m-%d')
-            response = table.scan()
-            logs = [item for item in response['Items'] if item['QueryId'].startswith(date_str)]
-
-            if logs:
-                s3.put_object(
-                    Bucket=bucket_name,
-                    Key=f'logs/{date_str}.json',
-                    Body=json.dumps(logs)
-                )
-      Runtime: python3.9
-      Environment:
-        Variables:
-          LOGGING_BUCKET: chatbot-logs-bucket
-
   ExportLogsEventRule:
     Type: AWS::Events::Rule
     Properties:
@@ -185,18 +162,18 @@ Resources:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref ExportLogsLambdaFunction
-      Action: 'lambda:InvokeFunction'
-      Principal: 'events.amazonaws.com'
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
 
   PermissionForApiGatewayToInvokeLambda:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref ChatbotLambdaFunction
-      Action: 'lambda:InvokeFunction'
-      Principal: 'apigateway.amazonaws.com'
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatbotApi}/*/POST/chatbot'
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatbotApi}/*/POST/chatbot"
 
 Outputs:
   ChatbotApiUrl:
-    Description: "API Gateway endpoint URL for chatbot"
-    Value: !Sub "https://${ChatbotApi}.execute-api.${AWS::Region}.amazonaws.com/prod/chatbot"
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ChatbotApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/chatbot'
